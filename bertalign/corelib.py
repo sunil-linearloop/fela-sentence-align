@@ -266,72 +266,72 @@ def first_back_track(i, j, pointers, search_path, a_types):
         if i == 0 and j == 0: # if reaching the origin
             return alignment[::-1]
 
-@nb.jit(nopython=True, fastmath=True, cache=True)
-def first_pass_align(src_len,
-                     tgt_len,
-                     w,
-                     search_path,
-                     align_types,
-                     dist,
-                     index
-                     ):
-    """
-    Perform the first-pass alignment to extract only 1-1 bitext segments.
-    Args:
-        src_len: int. Number of source sentences.
-        tgt_len: int. Number of target sentences.
-        w: int. Window size for the first-pass alignment.
-        search_path: numpy array. Search path for the first-pass alignment.
-        align_types: numpy array. Alignment types for the first-pass alignment.
-        dist: numpy array. Distance matrix for top-k similar vecs.
-        index: numpy array. Index matrix for top-k similar vecs.
-    Returns:
-        pointers: numpy array recording best alignments for each DP cell.
-    """
-    # Initialize cost and backpointer matrix.
-    cost = np.zeros((src_len + 1, 2 * w + 1), dtype=nb.float32)
-    pointers = np.zeros((src_len + 1, 2 * w + 1), dtype=nb.uint8)
-  
-    top_k = index.shape[1]
-
-    for i in range(src_len + 1):
-        i_start = search_path[i][0]
-        i_end = search_path[i][1]
-        for j in range(i_start, i_end + 1):
-            if i + j == 0: # initialize the origin with zero
-                continue
-            best_score = -np.inf
-            best_a = -1
-            for a in range(align_types.shape[0]):
-                a_1 = align_types[a][0]
-                a_2 = align_types[a][1]
-                prev_i = i - a_1
-                prev_j = j - a_2
-                if prev_i < 0 or prev_j < 0 :  # no previous cell 
-                    continue
-                prev_i_start = search_path[prev_i][0]
-                prev_i_end =  search_path[prev_i][1]
-                if prev_j < prev_i_start or prev_j > prev_i_end: # out of bound of cost matrix
-                    continue
-                prev_j_offset = prev_j - prev_i_start
-                score = cost[prev_i][prev_j_offset]
-                
-                # Extract the score for 1-1 bead from faiss.
-                if a_1 > 0 and a_2 > 0:
-                    for k in range(top_k):
-                        if index[i-1][k] == j - 1:
-                            score += dist[i-1][k]
-                if score > best_score:
-                    best_score = score
-                    best_a = a
+# Remove the Numba decorator temporarily to debug
+def first_pass_align(src_len, tgt_len, w, search_path, align_types, dist, index):
+    print("Starting first pass alignment...")
+    print(f"Input shapes - src_len: {src_len}, tgt_len: {tgt_len}")
+    print(f"Search path shape: {search_path.shape}")
+    print(f"Align types shape: {align_types.shape}")
+    print(f"Distance matrix shape: {dist.shape}")
+    print(f"Index matrix shape: {index.shape}")
+    
+    try:
+        # Initialize matrices
+        cost = np.zeros((src_len + 1, 2 * w + 1))
+        pointers = np.zeros((src_len + 1, 2 * w + 1), dtype=np.int32)
+        
+        # Process alignments
+        for i in range(src_len + 1):
+            print(f"Processing source sentence {i}/{src_len}")
+            i_start = search_path[i][0]
+            i_end = search_path[i][1]
             
-            # Update cell(i, j) with the best score
-            # and rescord the trace history.
-            j_offset = j - i_start
-            cost[i][j_offset] = best_score
-            pointers[i][j_offset] = best_a
-
-    return pointers
+            for j in range(i_start, i_end + 1):
+                if i + j == 0:
+                    continue
+                
+                best_score = float('-inf')
+                best_a = -1
+                
+                for a in range(len(align_types)):
+                    a_1, a_2 = align_types[a]
+                    prev_i = i - a_1
+                    prev_j = j - a_2
+                    
+                    if prev_i < 0 or prev_j < 0:
+                        continue
+                    
+                    prev_i_start = search_path[prev_i][0]
+                    prev_i_end = search_path[prev_i][1]
+                    
+                    if prev_j < prev_i_start or prev_j > prev_i_end:
+                        continue
+                    
+                    prev_j_offset = prev_j - prev_i_start
+                    score = cost[prev_i][prev_j_offset]
+                    
+                    if a_1 > 0 and a_2 > 0:
+                        for k in range(index.shape[1]):
+                            if index[i-1][k] == j - 1:
+                                score += dist[i-1][k]
+                                break
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_a = a
+                
+                j_offset = j - i_start
+                cost[i][j_offset] = best_score
+                pointers[i][j_offset] = best_a
+        
+        print("First pass alignment completed successfully")
+        return pointers
+        
+    except Exception as e:
+        print(f"Error in first_pass_align: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 def find_first_search_path(src_len,
                            tgt_len,
@@ -378,25 +378,43 @@ def get_alignment_types(max_alignment_size):
     return np.array(alignment_types)
 
 def find_top_k_sents(src_vecs, tgt_vecs, k=3):
-    """
-    Find the top_k similar vecs in tgt_vecs for each vec in src_vecs.
-    Args:
-        src_vecs: numpy array of shape (num_src_sents, embedding_size).
-        tgt_vecs: numpy array of shape (num_tgt_sents, embedding_size).
-        k: int. Number of most similar target sentences.
-    Returns:
-        D: numpy array. Similarity score matrix of shape (num_src_sents, k).
-        I: numpy array. Target index matrix of shape (num_src_sents, k).
-    """
-    embedding_size = src_vecs.shape[1]
-    if torch.cuda.is_available() and platform == 'linux': # GPU version
-        res = faiss.StandardGpuResources() 
-        index = faiss.IndexFlatIP(embedding_size)
-        gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
-        gpu_index.add(tgt_vecs) 
-        D, I = gpu_index.search(src_vecs, k)
-    else: # CPU version
-        index = faiss.IndexFlatIP(embedding_size)
-        index.add(tgt_vecs)
-        D, I = index.search(src_vecs, k)
-    return D, I
+    try:
+        embedding_size = src_vecs.shape[1]
+        print(f"Creating FAISS index with embedding size: {embedding_size}")
+        
+        # Initialize GPU resources with error checking
+        try:
+            res = faiss.StandardGpuResources()
+            print("GPU resources initialized")
+        except Exception as e:
+            print(f"GPU initialization failed: {e}")
+            print("Falling back to CPU")
+            index = faiss.IndexFlatIP(embedding_size)
+            index.add(tgt_vecs)
+            D, I = index.search(src_vecs, k)
+            return D, I
+            
+        # Create and transfer index to GPU
+        try:
+            index = faiss.IndexFlatIP(embedding_size)
+            gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
+            print("Index transferred to GPU")
+            
+            # Add vectors and search
+            gpu_index.add(tgt_vecs)
+            print(f"Added {len(tgt_vecs)} target vectors to index")
+            D, I = gpu_index.search(src_vecs, k)
+            print("Search completed")
+            return D, I
+            
+        except Exception as e:
+            print(f"GPU search failed: {e}")
+            print("Falling back to CPU")
+            index = faiss.IndexFlatIP(embedding_size)
+            index.add(tgt_vecs)
+            D, I = index.search(src_vecs, k)
+            return D, I
+            
+    except Exception as e:
+        print(f"Critical error in find_top_k_sents: {e}")
+        raise
