@@ -21,15 +21,18 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
 
 # Copy requirements file first and remove googletrans
 COPY requirements.txt /app/requirements.txt
-RUN grep -v "googletrans" /app/requirements.txt > /app/requirements_no_googletrans.txt
+RUN grep -v "googletrans\|faiss" /app/requirements.txt > /app/requirements_filtered.txt
 
-# Install Python dependencies
+# Install Python dependencies (excluding faiss-gpu to install it separately)
 RUN python -m pip install --upgrade pip && \
-    python -m pip install -r /app/requirements_no_googletrans.txt && \
+    python -m pip install -r /app/requirements_filtered.txt && \
     python -m pip install runpod
 
 # Install Hugging Face transfer optimization for faster downloads
 RUN python -m pip install "huggingface_hub[hf_transfer]"
+
+# Install faiss-gpu with CUDA support
+RUN python -m pip install faiss-gpu
 
 # Install compatible versions for googletrans
 RUN python -m pip install httpcore==0.9.1 httpx==0.13.3 && \
@@ -55,6 +58,7 @@ RUN chmod -R 777 /app/models
 
 # Verify installation
 RUN python -c "from googletrans import Translator; print('Googletrans successfully imported')"
+RUN python -c "import faiss; print('FAISS version:', faiss.__version__); print('FAISS has GPU support:', hasattr(faiss, 'StandardGpuResources'))"
 
 # Set environment variables for RunPod serverless
 ENV PYTHONPATH=/app
