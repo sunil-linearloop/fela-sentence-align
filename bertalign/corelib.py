@@ -382,38 +382,42 @@ def find_top_k_sents(src_vecs, tgt_vecs, k=3):
         embedding_size = src_vecs.shape[1]
         print(f"Creating FAISS index with embedding size: {embedding_size}")
         
-        # Initialize GPU resources with error checking
-        try:
-            res = faiss.StandardGpuResources()
-            print("GPU resources initialized")
-        except Exception as e:
-            print(f"GPU initialization failed: {e}")
+        # Check if faiss has GPU capabilities
+        has_gpu = hasattr(faiss, 'StandardGpuResources')
+        
+        if has_gpu:
+            try:
+                # Initialize GPU resources
+                res = faiss.StandardGpuResources()
+                print("GPU resources initialized successfully")
+                
+                # Create and transfer index to GPU
+                index = faiss.IndexFlatIP(embedding_size)
+                gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
+                print("Index transferred to GPU")
+                
+                # Add target vectors to index
+                gpu_index.add(tgt_vecs)
+                print(f"Added {tgt_vecs.shape[0]} vectors to GPU index")
+                
+                # Search for nearest neighbors
+                D, I = gpu_index.search(src_vecs, k)
+                print("GPU search completed")
+                return D, I
+            except Exception as e:
+                print(f"GPU initialization failed: {str(e)}")
+                print("Falling back to CPU")
+        else:
+            print("GPU support not available in FAISS")
             print("Falling back to CPU")
-            index = faiss.IndexFlatIP(embedding_size)
-            index.add(tgt_vecs)
-            D, I = index.search(src_vecs, k)
-            return D, I
-            
-        # Create and transfer index to GPU
-        try:
-            index = faiss.IndexFlatIP(embedding_size)
-            gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
-            print("Index transferred to GPU")
-            
-            # Add vectors and search
-            gpu_index.add(tgt_vecs)
-            print(f"Added {len(tgt_vecs)} target vectors to index")
-            D, I = gpu_index.search(src_vecs, k)
-            print("Search completed")
-            return D, I
-            
-        except Exception as e:
-            print(f"GPU search failed: {e}")
-            print("Falling back to CPU")
-            index = faiss.IndexFlatIP(embedding_size)
-            index.add(tgt_vecs)
-            D, I = index.search(src_vecs, k)
-            return D, I
+        
+        # CPU fallback
+        index = faiss.IndexFlatIP(embedding_size)
+        index.add(tgt_vecs)
+        print(f"Added {tgt_vecs.shape[0]} vectors to CPU index")
+        D, I = index.search(src_vecs, k)
+        print("CPU search completed")
+        return D, I
             
     except Exception as e:
         print(f"Critical error in find_top_k_sents: {e}")
